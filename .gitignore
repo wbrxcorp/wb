@@ -1,0 +1,5 @@
+wb
+*.bin
+*.o
+.vscode
+*.a
