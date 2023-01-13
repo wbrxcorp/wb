@@ -7,10 +7,16 @@
 #include "volume.h"
 #include "install.h"
 #include "wg.h"
+#include "misc.h"
 
 static bool is_root_user()
 {
     return (getuid() == 0);
+}
+
+static void must_be_root()
+{
+    if (!is_root_user()) throw std::runtime_error("You must be a root user.");
 }
 
 static std::filesystem::path user_home_dir()
@@ -130,6 +136,17 @@ static int _main(int argc, char* argv[])
     wg_command.add_subparser(wg_notify_command);
     program.add_subparser(wg_command);
 
+    // misc subcommands
+    argparse::ArgumentParser misc_command("misc");
+    misc_command.add_description("Miscellaneous functions");
+    argparse::ArgumentParser wayland_ping_command("wayland-ping");
+    wayland_ping_command.add_argument("-q", "--quiet").default_value(false).implicit_value(true);
+    wayland_ping_command.add_argument("-w", "--wait").default_value(false).implicit_value(true);
+    misc_command.add_subparser(wayland_ping_command);
+    argparse::ArgumentParser generate_rdp_cert_command("generate-rdp-cert");
+    misc_command.add_subparser(generate_rdp_cert_command);
+    program.add_subparser(misc_command);
+
     try {
         program.parse_args(argc, argv);
     }
@@ -176,6 +193,14 @@ static int _main(int argc, char* argv[])
                 std::cerr << wg_getconfig_command;
             } else if (wg_command.is_subcommand_used("notify")) {
                 std::cerr << wg_notify_command;
+            }
+        } else if (program.is_subcommand_used("misc")) {
+            if (misc_command.is_subcommand_used("wayland-ping")) {
+                std::cerr << wayland_ping_command;
+            } else if (misc_command.is_subcommand_used("generate-rdp-cert")) {
+                std::cerr << generate_rdp_cert_command;
+            } else {
+                std::cerr << misc_command;
             }
         } else {
             std::cerr << program;
@@ -225,6 +250,7 @@ static int _main(int argc, char* argv[])
         return vm::_delete(vm_root(), delete_command.get("vmname"));
     }
     if (program.is_subcommand_used("volume")) {
+        must_be_root();
         if (volume_command.is_subcommand_used("add")) {
             return volume::add(vm_root(), volume_add_command.get("name"), volume_add_command.get("device"));
         }
@@ -247,6 +273,7 @@ static int _main(int argc, char* argv[])
         return 1;
     }
     if (program.is_subcommand_used("install")) {
+        must_be_root();
         if (install_command.is_used("disk")) {
             return install::install(install_command.get("disk"), install_command.get("-i"), 
                 install_command.get<bool>("--text-mode"), install_command.get<bool>("--installer"));
@@ -258,6 +285,7 @@ static int _main(int argc, char* argv[])
         return install::show_usable_disks();
     }
     if (program.is_subcommand_used("wg")) {
+        must_be_root();
         if (wg_command.is_subcommand_used("genkey")) {
             return wg::genkey(wg_genkey_command.get<bool>("--force"));
         }
@@ -272,6 +300,21 @@ static int _main(int argc, char* argv[])
         }
         //else
         std::cout << wg_command;
+        return 1;
+    }
+    if (program.is_subcommand_used("misc")) {
+        if (misc_command.is_subcommand_used("wayland-ping")) {
+            auto rst = wayland_ping(wayland_ping_command.get<bool>("--wait"));
+            if (!wayland_ping_command.get<bool>("--quiet")) {
+                if (rst) std::cout << "Wayland display is alive." << std::endl;
+                else std::cout << "Wayland display is not available." << std::endl;
+            }
+            return rst? 0 : 1;
+        }
+        if (misc_command.is_subcommand_used("generate-rdp-cert")) {
+            return generate_rdp_cert();
+        }
+        std::cout << misc_command;
         return 1;
     }
 

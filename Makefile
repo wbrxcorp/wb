@@ -1,7 +1,7 @@
 .SUFFIXES: .cpp .o .bin
 
-OBJS=wb.o vm.o volume.o install.o wg.o
-LIBS=-lmount -lsmartcols -liniparser4 -lblkid -lbtrfsutil -luuid -lcurl -lwghub -lcrypto -lqrencode
+OBJS=wb.o vm.o volume.o install.o wg.o misc.o
+LIBS=-lmount -lsmartcols -liniparser4 -lblkid -lbtrfsutil -luuid -lcurl -lwghub -lcrypto -lqrencode -lwayland-client
 
 all: wb libwb.a
 
