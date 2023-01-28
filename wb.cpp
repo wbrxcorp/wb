@@ -77,7 +77,7 @@ static int _main(int argc, char* argv[])
     create_command.add_argument("--cpu", "-c").scan<'u',uint16_t>().help("Number of CPU");
     create_command.add_argument("--data-partition")
         .nargs(1)
-        .scan<'u',uint16_t>()
+        .scan<'u',uint32_t>()
         .help("Create uninitialized data partition with specified size in GiB");
     create_command.add_argument("vmname").nargs(1).help("VM name");
     create_command.add_argument("system-file").nargs(argparse::nargs_pattern::optional);
@@ -242,7 +242,7 @@ static int _main(int argc, char* argv[])
             .volume = is_root_user()? std::make_optional(create_command.get("--volume")) : std::nullopt,
             .memory = create_command.present<uint32_t>("--memory"),
             .cpu = create_command.present<uint16_t>("--cpu"),
-            .data_partition = create_command.present<uint16_t>("--data-partition"),
+            .data_partition = create_command.present<uint32_t>("--data-partition"),
             .system_file = create_command.present("system-file")
         });
     }

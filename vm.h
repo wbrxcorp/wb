@@ -16,7 +16,7 @@ namespace vm {
         const std::optional<std::string>& volume = std::nullopt;
         std::optional<uint32_t> memory = std::nullopt;
         std::optional<uint16_t> cpu = std::nullopt;
-        std::optional<uint16_t> data_partition = std::nullopt;
+        std::optional<uint32_t> data_partition = std::nullopt;
         const std::optional<std::filesystem::path>& system_file = std::nullopt;
     };
     int create(const std::filesystem::path& vm_root, const std::string& vmname, const CreateOptions& options = {});
