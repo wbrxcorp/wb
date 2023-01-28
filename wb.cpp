@@ -8,6 +8,7 @@
 #include "install.h"
 #include "wg.h"
 #include "misc.h"
+#include "invoke.h"
 
 static bool is_root_user()
 {
@@ -147,6 +148,10 @@ static int _main(int argc, char* argv[])
     misc_command.add_subparser(generate_rdp_cert_command);
     program.add_subparser(misc_command);
 
+    // invoke subcommand
+    argparse::ArgumentParser invoke_command("invoke");
+    program.add_subparser(invoke_command);
+
     try {
         program.parse_args(argc, argv);
     }
@@ -202,6 +207,8 @@ static int _main(int argc, char* argv[])
             } else {
                 std::cerr << misc_command;
             }
+        } else if (program.is_subcommand_used("invoke")) {
+            std::cerr << invoke_command;
         } else {
             std::cerr << program;
         }
@@ -317,6 +324,9 @@ static int _main(int argc, char* argv[])
         std::cout << misc_command;
         return 1;
     }
+    if (program.is_subcommand_used("invoke")) {
+        return invoke();
+    }
 
     std::cout << program;
     return 1;
@@ -328,7 +338,6 @@ int main(int argc, char* argv[])
     return _main(argc, argv);
 }
 #endif
-
 
 #ifdef __USE_REAL_MAIN__
 int main(int argc, char* argv[])
