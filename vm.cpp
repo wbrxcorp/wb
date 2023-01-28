@@ -98,7 +98,7 @@ static void create_allocated_nocow_file(const std::filesystem::path& path, size_
     auto fd = open(path.c_str(), O_CREAT|O_RDWR, S_IRUSR|S_IWUSR);
     if (fd < 0) throw std::runtime_error("Creating file with open() failed. Error createing data file.");
     int f = 0;
-    if (ioctl(fd, EXT2_IOC_GETFLAGS, &f)) {
+    if (ioctl(fd, EXT2_IOC_GETFLAGS, &f) == 0) {
         f |= FS_NOCOW_FL;
         ioctl(fd, EXT2_IOC_SETFLAGS, &f);
     }
