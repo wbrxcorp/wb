@@ -180,6 +180,7 @@ std::optional<std::pair<std::filesystem::path,std::string/*fstype*/>> get_source
     if (!std::filesystem::exists(path) || !std::filesystem::is_directory(path)) return std::nullopt;
     // else
     std::shared_ptr<libmnt_table> tb(mnt_new_table_from_file("/proc/self/mountinfo"),mnt_unref_table);
+    if (!tb) throw std::runtime_error("Cannot open /proc/self/mountinfo");
     std::shared_ptr<libmnt_cache> cache(mnt_new_cache(), mnt_unref_cache);
     mnt_table_set_cache(tb.get(), cache.get());
 
@@ -190,6 +191,8 @@ std::optional<std::pair<std::filesystem::path,std::string/*fstype*/>> get_source
 std::optional<std::filesystem::path> get_volume_dir(const std::filesystem::path& vm_root, const std::string& volume_name)
 {
     auto volume_dir = vm_root / ("@" + volume_name);
+    if (volume_name == "default") return std::filesystem::is_directory(volume_dir)? std::make_optional(volume_dir) : std::nullopt;
+    //else
     return volume::get_source_device_from_mountpoint(volume_dir)? std::make_optional(volume_dir) : std::nullopt;
 }
 
