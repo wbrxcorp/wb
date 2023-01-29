@@ -1,6 +1,9 @@
+#include <unistd.h>
+#include <sched.h>
 #include <sys/utsname.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
+#include <sys/mount.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 
@@ -10,21 +13,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include "install.h"
 #include "misc.h"
 
-int sleep(const nlohmann::json& arguments)
-{
-    auto seconds = arguments.get<uint8_t>();
-    sleep(seconds);
-    std::cout << nlohmann::json({{"return", true}});
-    return 0;
-}
-
-int echo(const nlohmann::json& arguments)
-{
-    std::cout << arguments;
-    return 0;
-}
+static const uint64_t least_size = 1024 * 1024 * 1024 * 8LL/*8GB*/;
 
 static std::optional<std::string> get_interface_name_with_default_gateway()
 {
@@ -130,6 +122,22 @@ static std::optional<std::pair<uint64_t,uint64_t> > get_memory_capacity() {
     return std::make_pair(available, total);
 }
 
+namespace invoke {
+
+int sleep(const nlohmann::json& arguments)
+{
+    auto seconds = arguments.get<uint8_t>();
+    sleep(seconds);
+    std::cout << nlohmann::json({{"return", true}});
+    return 0;
+}
+
+int echo(const nlohmann::json& arguments)
+{
+    std::cout << arguments;
+    return 0;
+}
+
 int system_status(const nlohmann::json& arguments)
 {
     struct utsname u;
@@ -170,6 +178,109 @@ int system_status(const nlohmann::json& arguments)
     return 0;
 }
 
+int install(const nlohmann::json& arguments)
+{
+    auto disk = arguments.get<std::string>();
+    if (getuid() > 0) {
+        // mock install
+        if (disk == "/dev/error") throw std::runtime_error("Installation failed");
+        auto message = [](const std::string& msg) {
+            std::cout << "MESSAGE:" << msg << std::endl;
+            usleep(200000);
+        };
+        auto progress = [](const double fraction) {
+            std::cout << "PROGRESS:" << fraction << std::endl;
+            usleep(200000);
+        };
+        message("Creating partitions...");
+        message("Creating partitions done.");
+        progress(0.03);
+        message("Formatting boot partition with FAT32");
+        progress(0.05);
+        message("Mouning boot partition...");
+        message("Done");
+        progress(0.07);
+        message("Installing UEFI bootloader");
+        message("Installing BIOS bootloader");
+        message("This system will be UEFI-only as this disk cannot be treated by BIOS");
+        progress(0.09);
+        message("Creating boot configuration file");
+        progress(0.10);
+        message("Copying system file");
+        message("Unmounting boot partition...");
+        message("Done");
+        progress(0.90);
+        message("Constructing data area");
+        message("Formatting partition for data area with BTRFS...");
+        message("Done");
+        progress(1.00);
+        return 0;
+    }
+    //else
+    if (unshare(CLONE_NEWNS) < 0) throw std::runtime_error("unshare(CLONE_NEWNS) failed");
+    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
+        throw std::runtime_error("Changing root filesystem propagation failed");
+    }
+    auto rst = install::install(disk, least_size, "/run/initramfs/boot/system.img", 
+            {}, // grub vars
+            [](double fraction){
+                std::cout << "PROGRESS:" << fraction << std::endl;
+            },
+            [](const std::string& message){
+                std::cout << "MESSAGE:" << message << std::endl;
+            }
+        );
+    return rst? 0 : 1;
+}
+
+int get_usable_disks_for_install(const nlohmann::json&)
+{
+    auto mock_disks = []() -> std::map<std::string,install::Disk> {
+        std::map<std::string,install::Disk> disks;
+        disks["/dev/hoge"] = install::Disk {
+            .name = "hoge",
+            .model = "MY SUPER DUPER DISK",
+            .size = 1024LL * 1024 * 1024 * 512,
+            .tran = "SATA",
+            .log_sec = 512
+        };
+        disks["/dev/error"] = install::Disk {
+            .name = "error",
+            .model = "MY BROKEN DISK",
+            .size = 1024LL * 1024 * 1024 * 128,
+            .tran = "NVMe",
+            .log_sec = 512
+        };
+        disks["/dev/fuga"] = install::Disk {
+            .name = "fuga",
+            .model = std::nullopt,
+            .size = 1024LL * 1024 * 1024 * 64,
+            .tran = std::nullopt,
+            .log_sec = 512
+        };
+        ::sleep(1);
+        return disks;
+    };
+
+    auto disks = getuid() == 0? install::enum_usable_disks(least_size) : mock_disks();
+
+    nlohmann::json result;
+    result["return"] = nlohmann::json::array();
+    for (const auto& [name,disk]:disks) {
+        auto obj = nlohmann::json({
+            {"name", name},
+            {"size", disk.size},
+            {"log_sec", disk.log_sec}
+        });
+        if (disk.model) obj["model"] = *disk.model;
+        if (disk.tran) obj["tran"] = *disk.tran;
+        result["return"].push_back(obj);
+    }
+
+    std::cout << result;
+    return 0;
+}
+
 int invoke()
 {
     try {
@@ -180,6 +291,8 @@ int invoke()
         if (command == "echo") return echo(arguments);
         else if (command == "sleep") return sleep(arguments);
         else if (command == "system-status") return system_status(arguments);
+        else if (command == "install") return install(arguments);
+        else if (command == "get-usable-disks-for-install") return get_usable_disks_for_install(arguments);
         else throw std::runtime_error("Unknown command: " + command);
     }
     catch (const std::runtime_error& err) {
@@ -192,6 +305,8 @@ int invoke()
     }
     return 0;
 }
+
+} // namespace invoke
 
 #ifdef __VSCODE_ACTIVE_FILE__
 int main(int argc, char* argv[])

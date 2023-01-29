@@ -131,33 +131,6 @@ static nlohmann::json lsblk()
     return nlohmann::json::parse(f)["blockdevices"];
 }
 
-struct Disk {
-    std::string name;
-    std::optional<std::string> model;
-    uint64_t size;
-    std::optional<std::string> tran;
-    uint16_t log_sec;
-};
-
-static std::map<std::string,Disk> enum_usable_disks(uint64_t least_size)
-{
-    std::map<std::string,Disk> disks;
-    for (auto& blockdevice : lsblk()) {
-        if (blockdevice["type"] != "disk" || blockdevice["ro"] == true /*|| blockdevice["tran"].is_null() // virtio disks doesn't have this*/
-            || blockdevice["size"].get<uint64_t>() < least_size || !blockdevice["log-sec"].is_number_integer()
-            || !is_all_descendants_free(blockdevice)) continue;
-        std::string name = blockdevice["name"];
-        disks["/dev/" + name] = {
-            .name = name,
-            .model = blockdevice["model"].is_null()? std::nullopt : std::make_optional(blockdevice["model"]),
-            .size = blockdevice["size"].get<uint64_t>(),
-            .tran = blockdevice["tran"].is_null()? std::nullopt : std::make_optional(blockdevice["tran"]),
-            .log_sec = blockdevice["log-sec"].get<uint16_t>()
-        };
-    }
-    return disks;
-}
-
 template <typename T> T with_tempmount(const std::filesystem::path& device, const char* fstype, int flags, const char* data,
     std::function<T(const std::filesystem::path&)> func)
 {
@@ -215,11 +188,30 @@ static void grub_install(const std::filesystem::path& boot_partition_dir, const 
 
 namespace install {
 
+std::map<std::string,Disk> enum_usable_disks(uint64_t least_size)
+{
+    std::map<std::string,Disk> disks;
+    for (auto& blockdevice : lsblk()) {
+        if (blockdevice["type"] != "disk" || blockdevice["ro"] == true /*|| blockdevice["tran"].is_null() // virtio disks doesn't have this*/
+            || blockdevice["size"].get<uint64_t>() < least_size || !blockdevice["log-sec"].is_number_integer()
+            || !blockdevice["mountpoint"].is_null() || !is_all_descendants_free(blockdevice)) continue;
+        std::string name = blockdevice["name"];
+        disks["/dev/" + name] = {
+            .name = name,
+            .model = blockdevice["model"].is_null()? std::nullopt : std::make_optional(blockdevice["model"]),
+            .size = blockdevice["size"].get<uint64_t>(),
+            .tran = blockdevice["tran"].is_null()? std::nullopt : std::make_optional(blockdevice["tran"]),
+            .log_sec = blockdevice["log-sec"].get<uint16_t>()
+        };
+    }
+    return disks;
+}
+
 bool install(const std::filesystem::path& disk, uint64_t least_size, 
     const std::filesystem::path& system_img,
     const std::map<std::string,std::string>& grub_vars,
-    std::function<void(double)> progress = [](auto){}, 
-    std::function<void(const std::string&)> message = [](auto){})
+    std::function<void(double)> progress/* = [](auto){}*/, 
+    std::function<void(const std::string&)> message/* = [](auto){}*/)
 {
     progress(0.01);
     const auto disks = enum_usable_disks(least_size);
@@ -381,6 +373,11 @@ int install(const std::filesystem::path& disk, const std::filesystem::path& syst
     std::map<std::string,std::string> grub_vars;
     if (text_mode) grub_vars["default"] = "text";
     if (installer) grub_vars["systemd_unit"] = "installer.target";
+
+    if (unshare(CLONE_NEWNS) < 0) throw std::runtime_error("unshare(CLONE_NEWNS) failed");
+    if (mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) {
+        throw std::runtime_error("Changing root filesystem propagation failed");
+    }
 
     return install(disk, least_size, system_image, grub_vars, [](auto){}, [](const std::string& message) {
         std::cout << message << std::endl;

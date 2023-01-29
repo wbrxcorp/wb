@@ -325,7 +325,7 @@ static int _main(int argc, char* argv[])
         return 1;
     }
     if (program.is_subcommand_used("invoke")) {
-        return invoke();
+        return invoke::invoke();
     }
 
     std::cout << program;
