@@ -358,6 +358,7 @@ int list(const std::filesystem::path& vm_root, const ListOptions& options/* = {}
     auto volumes = get_volume_list(vm_root);
     if (options.names_only) {
         for (const auto& volume : volumes) {
+            if (options.online_only && !volume.second.online) continue;
             std::cout << volume.second.name << std::endl;
         }
         return 0;
@@ -383,8 +384,8 @@ int list(const std::filesystem::path& vm_root, const ListOptions& options/* = {}
     scols_line_set_data(sep, 6, "-------");
 
     for (const auto& i : volumes) {
-        auto line = scols_table_new_line(table.get(), NULL);
         if (options.online_only && !i.second.online) continue;
+        auto line = scols_table_new_line(table.get(), NULL);
         //else
         if (i.second.online) scols_line_set_data(line, 0, "*");
         scols_line_set_data(line, 1, i.first.c_str());
