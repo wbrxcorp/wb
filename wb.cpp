@@ -34,298 +34,421 @@ static std::filesystem::path vm_root()
     return is_root_user()? "/var/vm" : user_home_dir() / "vm";
 }
 
+typedef std::tuple<
+    argparse::ArgumentParser,
+    std::function<void(argparse::ArgumentParser&)>,
+    std::function<int(const argparse::ArgumentParser&)>
+> SubSubCommand;
+
+typedef std::pair<
+    argparse::ArgumentParser,
+    std::variant<
+        std::pair<
+            std::function<void(argparse::ArgumentParser&)>,
+            std::function<int(const argparse::ArgumentParser&)>
+        >,
+        std::map<std::string,SubSubCommand>
+    >
+> SubCommand;
+
+namespace subcommand {
+
+    static SubCommand start = {
+        argparse::ArgumentParser("start"), std::make_pair(
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Start VM");
+            parser.add_argument("-c", "--console").default_value(false).implicit_value(true);
+            parser.add_argument("vmname").nargs(1);
+        },
+        [](const argparse::ArgumentParser& parser) {
+            return vm::start(parser.get("vmname"), parser.get<bool>("-c"));
+        }
+    )};
+
+    static SubCommand stop = {
+        argparse::ArgumentParser("stop"), std::make_pair(
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Stop VM");
+            parser.add_argument("-c", "--console").default_value(false).implicit_value(true);
+            parser.add_argument("-f", "--force").default_value(false).implicit_value(true);
+            parser.add_argument("vmname").nargs(1);
+        },
+        [](const argparse::ArgumentParser& parser) {
+            return vm::stop(parser.get("vmname"), parser.get<bool>("-f"), parser.get<bool>("-c"));
+        }
+    )};
+
+    static SubCommand restart = {
+        argparse::ArgumentParser("restart"), std::make_pair(
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Restart VM");
+            parser.add_argument("-f", "--force").default_value(false).implicit_value(true);
+            parser.add_argument("vmname").nargs(1);
+        },
+        [](const argparse::ArgumentParser& parser) {
+            return vm::restart(parser.get("vmname"), parser.get<bool>("-f"));
+        }
+    )};
+
+    static SubCommand console = {
+        argparse::ArgumentParser("console"), std::make_pair(
+            [](auto& parser) {
+                parser.add_description("Connect to VM console");
+                parser.add_argument("vmname").nargs(1);            
+            },
+            [](const auto& parser) {
+                return vm::console(parser.get("vmname"));
+            }
+        )
+    };
+
+    static SubCommand autostart = {
+        argparse::ArgumentParser("autostart"), std::make_pair(
+            [](auto& parser) {
+                parser.add_description("Enable/disable VM autostart");
+                parser.add_argument("vmname").nargs(1);
+                parser.add_argument("onoff").nargs(argparse::nargs_pattern::optional);
+            },
+            [](const auto& parser) {
+                std::optional<bool> onoff = std::nullopt;
+                if (parser.is_used("onoff")) {
+                    auto onoff_str = parser.get("onoff");
+                    if (onoff_str == "on") onoff = true;
+                    else if (onoff_str == "off") onoff = false;
+                    else throw std::runtime_error("'on' or 'off' must be specified");
+                }
+                return vm::autostart(parser.get("vmname"), onoff);
+            }
+        )
+    };
+
+    static SubCommand list = {
+        argparse::ArgumentParser("list"), std::make_pair(
+            [](auto& parser) {
+                parser.add_description("List VMs");
+            },
+            [](const auto& parser) {
+                return vm::list(vm_root());
+            }
+        )
+    };
+
+    static SubCommand create = {
+        argparse::ArgumentParser("create"), std::make_pair(
+            [](auto& parser) {
+                parser.add_description("Create new VM");
+                if (is_root_user()) 
+                    parser.add_argument("--volume", "-v").template default_value<std::string>("default").help("Specify volume to create VM on");
+                parser.add_argument("--memory", "-m").template scan<'u',uint32_t>().help("Memory capacity in MB");
+                parser.add_argument("--cpu", "-c").template scan<'u',uint16_t>().help("Number of CPU");
+                parser.add_argument("--data-partition")
+                    .nargs(1)
+                    .template scan<'u',uint32_t>()
+                    .help("Create uninitialized data partition with specified size in GiB");
+                parser.add_argument("vmname").nargs(1).help("VM name");
+                parser.add_argument("system-file").nargs(argparse::nargs_pattern::optional);
+            },
+            [](const auto& parser) {
+                return vm::create(vm_root(), parser.get("vmname"), {
+                    .volume = is_root_user()? std::make_optional(parser.get("--volume")) : std::nullopt,
+                    .memory = parser.template present<uint32_t>("--memory"),
+                    .cpu = parser.template present<uint16_t>("--cpu"),
+                    .data_partition = parser.template present<uint32_t>("--data-partition"),
+                    .system_file = parser.present("system-file")
+                });
+            }
+        )
+    };
+
+    static SubCommand _delete = {
+        argparse::ArgumentParser("delete"), std::make_pair(
+            [](auto& parser) {
+                parser.add_description("Delete VM");
+                parser.add_argument("vmname").help("VM name");
+            },
+            [](const auto& parser) {
+                return vm::_delete(vm_root(), parser.get("vmname"));
+            }
+        )
+    };
+
+    static SubCommand install = {
+        argparse::ArgumentParser("install"), std::make_pair(
+            [](auto& parser) {
+                parser.add_argument("-i", "--system-image").nargs(1).template default_value<std::string>("/run/initramfs/boot/system.img");
+                parser.add_argument("--text-mode").default_value(false).implicit_value(true);
+                parser.add_argument("--installer").default_value(false).implicit_value(true);
+                parser.add_argument("disk").nargs(argparse::nargs_pattern::optional);
+            },
+            [](const auto& parser) {
+                must_be_root();
+                if (parser.is_used("disk")) {
+                    return install::install(parser.get("disk"), parser.get("-i"), 
+                        parser.template get<bool>("--text-mode"), parser.template get<bool>("--installer"));
+                }
+                //else
+                std::cout << parser;
+                std::cout << std::endl;
+                std::cout << "Usable disks below:" << std::endl;
+                return install::show_usable_disks();
+            }
+        )
+    };
+
+    static SubCommand invoke = {
+        argparse::ArgumentParser("invoke"), std::make_pair(
+            [](auto& parser) {
+            },
+            [](const auto& parser) {
+                return invoke::invoke();
+            }
+        )
+    };
+
+    // volume subsubcommands
+    static SubSubCommand volume_add = {
+        argparse::ArgumentParser("add"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("name").nargs(1);
+            parser.add_argument("device").nargs(1);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::add(vm_root(), parser.get("name"), parser.get("device"));
+        }
+    };
+
+    static SubSubCommand volume_remove = {
+        argparse::ArgumentParser("remove"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("name").nargs(1);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::remove(vm_root(), parser.get("name"));
+        }
+    };
+
+    static SubSubCommand volume_scan = {
+        argparse::ArgumentParser("scan"), 
+        [](argparse::ArgumentParser& parser) {
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::scan(vm_root());
+        }
+    };
+
+    static SubSubCommand volume_list = {
+        argparse::ArgumentParser("list"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("-n", "--names-only").default_value(false).implicit_value(true);
+            parser.add_argument("-o", "--online-only").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::list(vm_root(), {
+                .online_only = parser.get<bool>("-o"),
+                .names_only = parser.get<bool>("-n")
+            });
+        }
+    };
+
+    static SubSubCommand volume_snapshot = {
+        argparse::ArgumentParser("snapshot"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("name").nargs(1);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::snapshot(vm_root(), parser.get("name"));
+        }
+    };
+
+    static SubSubCommand volume_backup = {
+        argparse::ArgumentParser("backup"), 
+        [](argparse::ArgumentParser& parser) {
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::backup(vm_root());
+        }
+    };
+
+    static SubSubCommand volume_clean = {
+        argparse::ArgumentParser("clean"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("name").nargs(argparse::nargs_pattern::optional);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::clean(vm_root(), parser.present("name"));
+        }
+    };
+
+    // wg subsubcommands
+
+    static SubSubCommand wg_genkey = {
+        argparse::ArgumentParser("genkey"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Generate WireGuard key");
+            parser.add_argument("-f", "--force").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            return wg::genkey(parser.get<bool>("--force"));
+        }
+    };
+
+    static SubSubCommand wg_pubkey = {
+        argparse::ArgumentParser("pubkey"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Show WireGuard public key");
+            parser.add_argument("-q", "--qrcode").help("Show QR code instead of text").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            return wg::pubkey(parser.get<bool>("--qrcode"));
+        }
+    };
+
+    static SubSubCommand wg_getconfig = {
+        argparse::ArgumentParser("getconfig"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Get authorized WireGuard config from server");
+            parser.add_argument("--accept-ssh-key", "-k").help("Accept SSH public key").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            return wg::getconfig(parser.get<bool>("--accept-ssh-key"));
+        }
+    };
+
+    static SubSubCommand wg_notify = {
+        argparse::ArgumentParser("notify"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Send notification message via HTTP over WireGuard");
+            parser.add_argument("uri").nargs(1).help("URI to get");
+        },[](const argparse::ArgumentParser& parser) {
+            return wg::notify(parser.get("uri"));
+        }
+    };
+
+    static SubSubCommand misc_wayland_ping = {
+        argparse::ArgumentParser("wayland-ping"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Ping Wayland compositor");
+            parser.add_argument("-q", "--quiet").default_value(false).implicit_value(true);
+            parser.add_argument("-w", "--wait").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            auto rst = wayland_ping(parser.get<bool>("--wait"));
+            if (!parser.get<bool>("--quiet")) {
+                if (rst) std::cout << "Wayland display is alive." << std::endl;
+                else std::cout << "Wayland display is not available." << std::endl;
+            }
+            return rst? 0 : 1;
+        }
+    };
+
+    static SubSubCommand misc_generate_rdp_cert = {
+        argparse::ArgumentParser("generate-rdp-cert"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Generate certificate for RDP");
+        },[](const argparse::ArgumentParser& parser) {
+            return generate_rdp_cert();
+        }
+    };
+
+} // namespace subcommand
+
+static std::map<std::string,SubCommand> subcommands = {
+    {"start", subcommand::start},
+    {"stop", subcommand::stop},
+    {"restart", subcommand::restart},
+    {"console", subcommand::console},
+    {"autostart", subcommand::autostart},
+    {"list", subcommand::list},
+    {"create", subcommand::create},
+    {"delete", subcommand::_delete},
+    {"install", subcommand::install},
+    {"invoke", subcommand::invoke},
+    {"volume", {argparse::ArgumentParser("volume"), std::map<std::string,SubSubCommand> {
+        {"add", subcommand::volume_add},
+        {"remove", subcommand::volume_remove},
+        {"scan", subcommand::volume_scan},
+        {"list", subcommand::volume_list},
+        {"snapshot", subcommand::volume_snapshot},
+        {"backup", subcommand::volume_backup},
+        {"clean", subcommand::volume_clean},
+    }}},
+    {"wg", {argparse::ArgumentParser("wg"), std::map<std::string,SubSubCommand> {
+        {"genkey", subcommand::wg_genkey},
+        {"pubkey", subcommand::wg_pubkey},
+        {"getconfig", subcommand::wg_getconfig},
+        {"notify", subcommand::wg_notify},
+    }}},
+    {"misc", {argparse::ArgumentParser("misc"), std::map<std::string,SubSubCommand> {
+        {"wayland-ping", subcommand::misc_wayland_ping},
+        {"generate-rdp-cert", subcommand::misc_generate_rdp_cert},
+    }}}
+};
+
 static int _main(int argc, char* argv[])
 {
     argparse::ArgumentParser program(argv[0]);
 
-    // VM subcommands
-    argparse::ArgumentParser start_command("start");
-    start_command.add_description("Start VM");
-    start_command.add_argument("-c", "--console").default_value(false).implicit_value(true);
-    start_command.add_argument("vmname").nargs(1);
-    program.add_subparser(start_command);
-
-    argparse::ArgumentParser stop_command("stop");
-    stop_command.add_description("Stop VM");
-    stop_command.add_argument("-c", "--console").default_value(false).implicit_value(true);
-    stop_command.add_argument("-f", "--force").default_value(false).implicit_value(true);
-    stop_command.add_argument("vmname").nargs(1);
-    program.add_subparser(stop_command);
-
-    argparse::ArgumentParser restart_command("restart");
-    restart_command.add_description("Restart VM");
-    restart_command.add_argument("-f", "--force").default_value(false).implicit_value(true);
-    restart_command.add_argument("vmname").nargs(1);
-    program.add_subparser(restart_command);
-
-    argparse::ArgumentParser console_command("console");
-    console_command.add_description("Connect to VM console");
-    console_command.add_argument("vmname").nargs(1);
-    program.add_subparser(console_command);
-
-    argparse::ArgumentParser autostart_command("autostart");
-    autostart_command.add_argument("vmname").nargs(1);
-    autostart_command.add_argument("onoff").nargs(argparse::nargs_pattern::optional);
-    program.add_subparser(autostart_command);
-
-    argparse::ArgumentParser list_command("list");
-    program.add_subparser(list_command);
-
-    argparse::ArgumentParser create_command("create");
-    if (is_root_user()) 
-        create_command.add_argument("--volume", "-v").default_value<std::string>("default").help("Specify volume to create VM on");
-    create_command.add_argument("--memory", "-m").scan<'u',uint32_t>().help("Memory capacity in MB");
-    create_command.add_argument("--cpu", "-c").scan<'u',uint16_t>().help("Number of CPU");
-    create_command.add_argument("--data-partition")
-        .nargs(1)
-        .scan<'u',uint32_t>()
-        .help("Create uninitialized data partition with specified size in GiB");
-    create_command.add_argument("vmname").nargs(1).help("VM name");
-    create_command.add_argument("system-file").nargs(argparse::nargs_pattern::optional);
-    program.add_subparser(create_command);
-
-    argparse::ArgumentParser delete_command("delete");
-    delete_command.add_argument("vmname").help("VM name");
-    program.add_subparser(delete_command);
-
-    // Volume subcommands
-    argparse::ArgumentParser volume_command("volume");
-    argparse::ArgumentParser volume_add_command("add");
-    volume_add_command.add_argument("name").nargs(1);
-    volume_add_command.add_argument("device").nargs(1);
-    volume_command.add_subparser(volume_add_command);
-    argparse::ArgumentParser volume_remove_command("remove");
-    volume_remove_command.add_argument("name").nargs(1);
-    volume_command.add_subparser(volume_remove_command);
-    argparse::ArgumentParser volume_scan_command("scan");
-    volume_command.add_subparser(volume_scan_command);
-    argparse::ArgumentParser volume_list_command("list");
-    volume_command.add_subparser(volume_list_command);
-    argparse::ArgumentParser volume_backup_command("backup");
-    volume_command.add_subparser(volume_backup_command);
-    argparse::ArgumentParser volume_clean_command("clean");
-    volume_clean_command.add_description("Cleanup .trash directory");
-    volume_clean_command.add_argument("volume").nargs(argparse::nargs_pattern::optional).help("Volume to clean");
-    volume_command.add_subparser(volume_clean_command);
-    program.add_subparser(volume_command);
-
-    argparse::ArgumentParser install_command("install");
-    install_command.add_argument("-i", "--system-image").nargs(1).default_value<std::string>("/run/initramfs/boot/system.img");
-    install_command.add_argument("--text-mode").default_value(false).implicit_value(true);
-    install_command.add_argument("--installer").default_value(false).implicit_value(true);
-    install_command.add_argument("disk").nargs(argparse::nargs_pattern::optional);
-    program.add_subparser(install_command);
-
-    // WireGuard subcommands
-    argparse::ArgumentParser wg_command("wg");
-    wg_command.add_description("WireGuard related commmands");
-    argparse::ArgumentParser wg_genkey_command("genkey");
-    wg_genkey_command.add_argument("-f", "--force").default_value(false).implicit_value(true);
-    wg_genkey_command.add_description("Generate WireGuard key");
-    wg_command.add_subparser(wg_genkey_command);
-    argparse::ArgumentParser wg_pubkey_command("pubkey");
-    wg_pubkey_command.add_description("Show WireGuard public key");
-    wg_pubkey_command.add_argument("-q", "--qrcode").help("Show QR code instead of text").default_value(false).implicit_value(true);
-    wg_command.add_subparser(wg_pubkey_command);
-    argparse::ArgumentParser wg_getconfig_command("getconfig");
-    wg_getconfig_command.add_description("Get authorized WireGuard config from server");
-    wg_getconfig_command.add_argument("--accept-ssh-key", "-k").help("Accept SSH public key").default_value(false).implicit_value(true);
-    wg_command.add_subparser(wg_getconfig_command);
-    argparse::ArgumentParser wg_notify_command("notify");
-    wg_notify_command.add_description("Send notification message via HTTP over WireGuard");
-    wg_notify_command.add_argument("uri").nargs(1).help("URI to get");
-    wg_command.add_subparser(wg_notify_command);
-    program.add_subparser(wg_command);
-
-    // misc subcommands
-    argparse::ArgumentParser misc_command("misc");
-    misc_command.add_description("Miscellaneous functions");
-    argparse::ArgumentParser wayland_ping_command("wayland-ping");
-    wayland_ping_command.add_argument("-q", "--quiet").default_value(false).implicit_value(true);
-    wayland_ping_command.add_argument("-w", "--wait").default_value(false).implicit_value(true);
-    misc_command.add_subparser(wayland_ping_command);
-    argparse::ArgumentParser generate_rdp_cert_command("generate-rdp-cert");
-    misc_command.add_subparser(generate_rdp_cert_command);
-    program.add_subparser(misc_command);
-
-    // invoke subcommand
-    argparse::ArgumentParser invoke_command("invoke");
-    program.add_subparser(invoke_command);
+    for (auto& [name, subcommand] : subcommands) {
+        auto& [parser, func_or_subsubcommand] = subcommand;
+        if (auto* p = std::get_if<std::pair<std::function<void(argparse::ArgumentParser&)>,std::function<int(const argparse::ArgumentParser&)>>>(&func_or_subsubcommand)) {
+            auto& [func1, func2] = *p;
+            func1(parser);
+        } else if (auto* p = std::get_if<std::map<std::string,SubSubCommand>>(&func_or_subsubcommand)) {
+            auto& subsubcommands = *p;
+            for (auto& [name, subsubcommand] : subsubcommands) {
+                auto& [subparser, func1, func2] = subsubcommand;
+                func1(subparser);
+                parser.add_subparser(subparser);
+            }
+        }
+        program.add_subparser(parser);
+    }
 
     try {
         program.parse_args(argc, argv);
     }
     catch (const std::runtime_error& err) {
         std::cerr << err.what() << std::endl;
-        if (program.is_subcommand_used("start")) {
-            std::cerr << start_command;
-        } else if (program.is_subcommand_used("stop")) {
-            std::cerr << stop_command;
-        } else if (program.is_subcommand_used("restart")) {
-            std::cerr << restart_command;
-        } else if (program.is_subcommand_used("console")) {
-            std::cerr << console_command;
-        } else if (program.is_subcommand_used("autostart")) {
-            std::cerr << autostart_command;
-        } else if (program.is_subcommand_used("list")) {
-            std::cerr << list_command;
-        } else if (program.is_subcommand_used("create")) {
-            std::cerr << create_command;
-        } else if (program.is_subcommand_used("delete")) {
-            std::cerr << delete_command;
-        } else if (program.is_subcommand_used("volume")) {
-            if (volume_command.is_subcommand_used("add")) {
-                std::cerr << volume_add_command;
-            } else if (volume_command.is_subcommand_used("remove")) {
-                std::cerr << volume_remove_command;
-            } else if (volume_command.is_subcommand_used("scan")) {
-                std::cerr << volume_scan_command;
-            } else if (volume_command.is_subcommand_used("list")) {
-                std::cerr << volume_list_command;
-            } else if (volume_command.is_subcommand_used("backup")) {
-                std::cerr << volume_backup_command;
-            } else if (volume_command.is_subcommand_used("clean")) {
-                std::cerr << volume_clean_command;
+        bool help_printed = false;
+        for (auto& [name, subcommand] : subcommands) {
+            if (program.is_subcommand_used(name)) {
+                auto& [parser, func_or_subsubcommand] = subcommand;
+                if (auto* p = std::get_if<std::map<std::string,SubSubCommand>>(&func_or_subsubcommand)) {
+                    auto& subsubcommands = *p;
+                    for (auto& [name, subsubcommand] : subsubcommands) {
+                        if (parser.is_subcommand_used(name)) {
+                            auto& [subparser, func1, func2] = subsubcommand;
+                            std::cerr << subparser;
+                            help_printed = true;
+                            break;
+                        }
+                    }
+                }
+                if (!help_printed) {
+                    std::cerr << parser;
+                    help_printed = true;
+                    break;
+                }
             }
-        } else if (program.is_subcommand_used("install")) {
-            std::cerr << install_command;
-        } else if (program.is_subcommand_used("wg")) {
-            if (wg_command.is_subcommand_used("genkey")) {
-                std::cerr << wg_genkey_command;
-            } else if (wg_command.is_subcommand_used("pubkey")) {
-                std::cerr << wg_pubkey_command;
-            } else if (wg_command.is_subcommand_used("getconfig")) {
-                std::cerr << wg_getconfig_command;
-            } else if (wg_command.is_subcommand_used("notify")) {
-                std::cerr << wg_notify_command;
-            }
-        } else if (program.is_subcommand_used("misc")) {
-            if (misc_command.is_subcommand_used("wayland-ping")) {
-                std::cerr << wayland_ping_command;
-            } else if (misc_command.is_subcommand_used("generate-rdp-cert")) {
-                std::cerr << generate_rdp_cert_command;
-            } else {
-                std::cerr << misc_command;
-            }
-        } else if (program.is_subcommand_used("invoke")) {
-            std::cerr << invoke_command;
-        } else {
+        }
+        if (!help_printed) {
             std::cerr << program;
         }
         return 1;
     }
-    catch (const std::logic_error& err) {
-        std::cerr << err.what() << std::endl;
-        return 1;
-    }
 
-    if (program.is_subcommand_used("start")) {
-        return vm::start(start_command.get("vmname"), start_command.get<bool>("-c"));
-    }
-    if (program.is_subcommand_used("stop")) {
-        return vm::stop(stop_command.get("vmname"), stop_command.get<bool>("-f"), stop_command.get<bool>("-c"));
-    }
-    if (program.is_subcommand_used("restart")) {
-        return vm::restart(restart_command.get("vmname"), restart_command.get<bool>("-f"));
-    }
-    if (program.is_subcommand_used("console")) {
-        return vm::console(console_command.get("vmname"));
-    }
-    if (program.is_subcommand_used("autostart")) {
-        std::optional<bool> onoff = std::nullopt;
-        if (autostart_command.is_used("onoff")) {
-            auto onoff_str = autostart_command.get("onoff");
-            if (onoff_str == "on") onoff = true;
-            else if (onoff_str == "off") onoff = false;
-            else throw std::runtime_error("'on' or 'off' must be specified");
-        }
-        return vm::autostart(autostart_command.get("vmname"), onoff);
-    }
-    if (program.is_subcommand_used("list")) {
-        return vm::list(vm_root());
-    }
-    if (program.is_subcommand_used("create")) {
-        return vm::create(vm_root(), create_command.get("vmname"), {
-            .volume = is_root_user()? std::make_optional(create_command.get("--volume")) : std::nullopt,
-            .memory = create_command.present<uint32_t>("--memory"),
-            .cpu = create_command.present<uint16_t>("--cpu"),
-            .data_partition = create_command.present<uint32_t>("--data-partition"),
-            .system_file = create_command.present("system-file")
-        });
-    }
-    if (program.is_subcommand_used("delete")) {
-        return vm::_delete(vm_root(), delete_command.get("vmname"));
-    }
-    if (program.is_subcommand_used("volume")) {
-        must_be_root();
-        if (volume_command.is_subcommand_used("add")) {
-            return volume::add(vm_root(), volume_add_command.get("name"), volume_add_command.get("device"));
-        }
-        if (volume_command.is_subcommand_used("remove")) {
-            return volume::remove(vm_root(), volume_remove_command.get("name"));
-        }
-        if (volume_command.is_subcommand_used("scan")) {
-            return volume::scan(vm_root());
-        }
-        if (volume_command.is_subcommand_used("list")) {
-            return volume::list(vm_root());
-        }
-        if (volume_command.is_subcommand_used("backup")) {
-            return volume::backup(vm_root());
-        }
-        if (volume_command.is_subcommand_used("clean")) {
-            return volume::clean(vm_root(), volume_clean_command.present("volume"));
-        }
-        std::cout << volume_command;
-        return 1;
-    }
-    if (program.is_subcommand_used("install")) {
-        must_be_root();
-        if (install_command.is_used("disk")) {
-            return install::install(install_command.get("disk"), install_command.get("-i"), 
-                install_command.get<bool>("--text-mode"), install_command.get<bool>("--installer"));
-        }
-        //else
-        std::cout << install_command;
-        std::cout << std::endl;
-        std::cout << "Usable disks below:" << std::endl;
-        return install::show_usable_disks();
-    }
-    if (program.is_subcommand_used("wg")) {
-        must_be_root();
-        if (wg_command.is_subcommand_used("genkey")) {
-            return wg::genkey(wg_genkey_command.get<bool>("--force"));
-        }
-        if (wg_command.is_subcommand_used("pubkey")) {
-            return wg::pubkey(wg_pubkey_command.get<bool>("--qrcode"));
-        }
-        if (wg_command.is_subcommand_used("getconfig")) {
-            return wg::getconfig(wg_getconfig_command.get<bool>("--accept-ssh-key"));
-        }
-        if (wg_command.is_subcommand_used("notify")) {
-            return wg::notify(wg_notify_command.get("uri"));
-        }
-        //else
-        std::cout << wg_command;
-        return 1;
-    }
-    if (program.is_subcommand_used("misc")) {
-        if (misc_command.is_subcommand_used("wayland-ping")) {
-            auto rst = wayland_ping(wayland_ping_command.get<bool>("--wait"));
-            if (!wayland_ping_command.get<bool>("--quiet")) {
-                if (rst) std::cout << "Wayland display is alive." << std::endl;
-                else std::cout << "Wayland display is not available." << std::endl;
+    for (auto& [name, subcommand] : subcommands) {
+        if (!program.is_subcommand_used(name)) continue;
+        auto& [parser, func_or_subsubcommand] = subcommand;
+        if (auto* p = std::get_if<std::pair<std::function<void(argparse::ArgumentParser&)>,std::function<int(const argparse::ArgumentParser&)>>>(&func_or_subsubcommand)) {
+            auto& [func1, func2] = *p;
+            return func2(parser);
+        } else if (auto* p = std::get_if<std::map<std::string,SubSubCommand>>(&func_or_subsubcommand)) {
+            auto& subsubcommands = *p;
+            for (auto& [name, subsubcommand] : subsubcommands) {
+                if (!parser.is_subcommand_used(name)) continue;
+                auto& [subparser, func1, func2] = subsubcommand;
+                return func2(subparser);
             }
-            return rst? 0 : 1;
+            std::cout << parser;
+            return 1;
         }
-        if (misc_command.is_subcommand_used("generate-rdp-cert")) {
-            return generate_rdp_cert();
-        }
-        std::cout << misc_command;
-        return 1;
-    }
-    if (program.is_subcommand_used("invoke")) {
-        return invoke::invoke();
     }
 
     std::cout << program;

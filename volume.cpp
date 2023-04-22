@@ -1,3 +1,10 @@
+/**
+ * @file volume.cpp
+ * @brief Volume management
+ * @author Walbrix Corporation
+ * @date 2019-2020
+ * @details This file is part of the Walbrix Virtual Machine Manager.
+ */
 #include <unistd.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
@@ -14,6 +21,11 @@
 #include "misc.h"
 #include "volume.h"
 
+/**
+ * @brief Get UUID of the partition
+ * @param partition Path to the partition
+ * @return UUID of the partition or std::nullopt if failed
+ */
 static std::optional<std::string> get_partition_uuid(const std::filesystem::path& partition)
 {
   blkid_cache cache;
@@ -28,6 +40,15 @@ static std::optional<std::string> get_partition_uuid(const std::filesystem::path
   return rst;
 }
 
+/**
+ * @brief Mount filesystem
+ * @param source Source device
+ * @param mountpoint Mount point
+ * @param fstype Filesystem type (default: auto)
+ * @param mountflags Mount flags (default: MS_RELATIME)
+ * @param data Mount options (default: "")
+ * @return 0 if success, 1 if already mounted, -1 if failed
+ */
 static int mount(const std::string& source,
   const std::filesystem::path& mountpoint,
   const std::string& fstype = "auto", unsigned int mountflags = MS_RELATIME,
@@ -50,6 +71,7 @@ static int mount(const std::string& source,
 }
 
 struct Volume {
+    std::string name;
     bool online = false;
     std::filesystem::path path;
     std::string device_or_uuid;
@@ -58,49 +80,71 @@ struct Volume {
     std::optional<uint64_t> free;
 };
 
+static std::optional<Volume> get_volume(const std::filesystem::path& path)
+{
+    if (!std::filesystem::is_directory(path)) return {};
+    auto name =  path.filename().string();
+    if (name[0] != '@') return {};
+    name.replace(name.begin(), name.begin() + 1, "");
+
+    Volume vol;
+    vol.name = name;
+
+    auto device = volume::get_source_device_from_mountpoint(path);
+    auto uuid_file = path / ".uuid";
+    if (!device && !std::filesystem::exists(uuid_file)) return {};
+
+    if (device) {
+        vol.online = true;
+        vol.path = path;
+        vol.device_or_uuid = device.value().first.c_str();
+        vol.fstype = device.value().second.c_str();
+
+        struct statvfs vfs;
+        if (statvfs(path.c_str(), &vfs) == 0) {
+            uint64_t blocksize = vfs.f_frsize? vfs.f_frsize : vfs.f_bsize; // https://github.com/coreutils/gnulib/blob/master/lib/fsusage.c#L124
+            vol.size = blocksize * vfs.f_blocks;
+            vol.free = blocksize * vfs.f_bfree;
+        }
+    } else {
+        std::ifstream f(uuid_file);
+        if (!f) return {};
+        f >> vol.device_or_uuid;
+    }
+    return vol;
+}
+
+static std::optional<Volume> get_volume(const std::filesystem::path& vm_root, const std::string& name)
+{
+    auto path = vm_root / ("@" + name);
+    return get_volume(path);
+}
+
+/**
+ * @brief Get list of volumes
+ * @param vm_root Root directory of VMs
+ * @return Map of volumes 
+ */
 static std::map<std::string,Volume> get_volume_list(const std::filesystem::path& vm_root)
 {
     std::map<std::string,Volume> volumes;
     for (const auto& dir : std::filesystem::directory_iterator(vm_root)) {
-        if (!dir.is_directory()) continue;
-        const auto& path = dir.path();
-        auto name =  path.filename().string();
-        if (name[0] != '@') continue;
-        name.replace(name.begin(), name.begin() + 1, "");
-
-        Volume vol;
-
-        auto device = volume::get_source_device_from_mountpoint(path);
-        auto uuid_file = path / ".uuid";
-        if (!device && !std::filesystem::exists(uuid_file)) continue;
-
-        if (device) {
-            vol.online = true;
-            vol.path = path;
-            vol.device_or_uuid = device.value().first.c_str();
-            vol.fstype = device.value().second.c_str();
-
-            struct statvfs vfs;
-            if (statvfs(path.c_str(), &vfs) == 0) {
-                uint64_t blocksize = vfs.f_frsize? vfs.f_frsize : vfs.f_bsize; // https://github.com/coreutils/gnulib/blob/master/lib/fsusage.c#L124
-                vol.size = blocksize * vfs.f_blocks;
-                vol.free = blocksize * vfs.f_bfree;
-            }
-        } else {
-            std::ifstream f(uuid_file);
-            if (!f) continue;
-            f >> vol.device_or_uuid;
-        }
-        volumes[name] = vol;
+        auto vol = get_volume(dir.path());
+        if (!vol) continue;
+        volumes[vol->name] = *vol;
     }
     return volumes;
 }
 
-static void backup(const std::filesystem::path& path)
+/**
+ * @brief Take snapshot of specified btrfs mountpoint
+ * @param path Path to the mountpoint
+ * @return Path to the snapshot
+ */
+static std::filesystem::path snapshot(const std::filesystem::path& path)
 {
     if (btrfs_util_is_subvolume(path.c_str()) != BTRFS_UTIL_OK) {
-        std::cerr << path << " is not a btrfs volume" << std::endl;
-        return;
+        throw std::runtime_error(path.string() + " is offline or not a btrfs volume");
     }
     //else
     auto head = path / ".snapshots/head";
@@ -118,10 +162,10 @@ static void backup(const std::filesystem::path& path)
         auto dow = path / ".snapshots" / DOWSTR[localtime(&subvol.otime.tv_sec)->tm_wday];
         if (btrfs_util_is_subvolume(dow.c_str()) == BTRFS_UTIL_OK) {
             btrfs_util_delete_subvolume(dow.c_str(), BTRFS_UTIL_DELETE_SUBVOLUME_RECURSIVE);
-            std::cout << "Snapshot " << dow << " deleted" << std::endl;
+            std::cerr << "Snapshot " << dow << " deleted" << std::endl;
         }
         std::filesystem::rename(head, dow);
-        std::cout << "Snapshot " << head << " renamed to " << dow << std::endl;
+        std::cerr << "Snapshot " << head << " renamed to " << dow << std::endl;
     }
     std::filesystem::create_directory(path / ".snapshots");
     auto rst = btrfs_util_create_snapshot(path.c_str(), head.c_str(), BTRFS_UTIL_CREATE_SNAPSHOT_READ_ONLY, NULL, NULL);
@@ -129,6 +173,16 @@ static void backup(const std::filesystem::path& path)
         throw std::runtime_error("Creating readonly snapshot " + head.string() + " failed(" + btrfs_util_strerror(rst) + ")");
     }
     sync();
+    return head;
+}
+
+/**
+ * @brief Backup specified btrfs mountpoint
+ * @param path Path to the mountpoint
+ */
+static void backup(const std::filesystem::path& path)
+{
+    std::filesystem::path head = snapshot(path);
     std::cout << "Snapshot " << head << " created" << std::endl;
 
     auto backup_link = path / ".backup";
@@ -165,6 +219,12 @@ static void backup(const std::filesystem::path& path)
     if (WEXITSTATUS(wstatus) != 0) throw std::runtime_error("rdiff-backup --remove-older-than failed");
 }
 
+/**
+ * @brief Clean trash of specified volume
+ * @param vm_root Root directory of VMs
+ * @param volume_name Name of the volume
+ * @return true if trash is cleaned, false if no trash exists
+ */
 static bool clean(const std::filesystem::path& vm_root, const std::string& volume_name)
 {
     auto volume_dir = volume::get_volume_dir(vm_root, volume_name);
@@ -293,9 +353,17 @@ int scan(const std::filesystem::path& vm_root)
     return 0;
 }
 
-int list(const std::filesystem::path& vm_root)
+int list(const std::filesystem::path& vm_root, const ListOptions& options/* = {}*/)
 {
     auto volumes = get_volume_list(vm_root);
+    if (options.names_only) {
+        for (const auto& volume : volumes) {
+            std::cout << volume.second.name << std::endl;
+        }
+        return 0;
+    }
+    //else
+
     std::shared_ptr<libscols_table> table(scols_new_table(), scols_unref_table);
     if (!table) throw std::runtime_error("scols_new_table() failed");
     scols_table_new_column(table.get(), "ONLINE", 0.1, SCOLS_FL_RIGHT);
@@ -316,6 +384,8 @@ int list(const std::filesystem::path& vm_root)
 
     for (const auto& i : volumes) {
         auto line = scols_table_new_line(table.get(), NULL);
+        if (options.online_only && !i.second.online) continue;
+        //else
         if (i.second.online) scols_line_set_data(line, 0, "*");
         scols_line_set_data(line, 1, i.first.c_str());
         scols_line_set_data(line, 2, i.second.path.c_str());
@@ -326,6 +396,18 @@ int list(const std::filesystem::path& vm_root)
     }
 
     scols_print_table(table.get());
+    return 0;
+}
+
+int snapshot(const std::filesystem::path& vm_root, const std::string& volume_name)
+{
+    auto volume = get_volume(vm_root, volume_name);
+    if (!volume) {
+        std::cerr << "Volume " + volume_name + " does not exist" << std::endl;
+        return 1;
+    }
+    auto head = ::snapshot(volume->path);
+    std::cout << head.string() << std::endl;
     return 0;
 }
 
@@ -355,10 +437,18 @@ int clean(const std::filesystem::path& vm_root, const std::optional<std::string>
     }
     // else 
     auto volumes = get_volume_list(vm_root);
+    bool all_success = true;
     for (const auto& volume : volumes) {
-        ::clean(vm_root, volume.first);
+        if (!volume.second.online) continue; // volume not mounted
+        try {
+            ::clean(vm_root, volume.first);
+        }
+        catch (const std::runtime_error& e) {
+            std::cerr << e.what() << std::endl;
+            all_success = false;
+        }
     }
-    return 0;
+    return all_success? 0 : 1;
 }
 
 } // namespace volume
