@@ -1,3 +1,7 @@
+/**
+ * @file invoke.cpp
+ * @author Walbrix Corporation 
+ */
 #include <unistd.h>
 #include <sched.h>
 #include <sys/utsname.h>
@@ -10,8 +14,10 @@
 #include <iostream>
 #include <fstream>
 #include <thread>
+#include <map>
 
 #include <nlohmann/json.hpp>
+#include <curl/curl.h>
 
 #include "install.h"
 #include "misc.h"
@@ -281,6 +287,41 @@ int get_usable_disks_for_install(const nlohmann::json&)
     return 0;
 }
 
+/**
+ * @brief Detect timezone using ip-api.com
+ * @return 0 on success, 1 on failure
+ * prints JSON to stdout
+ */
+int detect_timezone(const nlohmann::json&)
+{
+    std::shared_ptr<CURL> curl(curl_easy_init(), curl_easy_cleanup);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, "http://ip-api.com/json");
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, +[](char* ptr, size_t size, size_t nmemb, void* userdata) -> size_t {
+        auto& buffer = *static_cast<std::string*>(userdata);
+        buffer.append(ptr, size * nmemb);
+        return size * nmemb;
+    });
+    std::string buffer;
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &buffer);
+    auto res = curl_easy_perform(curl.get());
+    if (res != CURLE_OK) throw std::runtime_error("curl_easy_perform() failed: " + std::string(curl_easy_strerror(res)));
+    auto json = nlohmann::json::parse(buffer);
+    if (!json.contains("timezone")) throw std::runtime_error("timezone not found in response");
+    std::cout << nlohmann::json({
+        {"return", json["timezone"]}
+    });
+    return 0;
+}
+
+static std::map<std::string, std::function<int(const nlohmann::json&)>> commands = {
+    {"echo", echo},
+    {"sleep", sleep},
+    {"system-status", system_status},
+    {"install", install},
+    {"get-usable-disks-for-install", get_usable_disks_for_install},
+    {"detect-timezone", detect_timezone}
+};
+
 int invoke()
 {
     try {
@@ -288,11 +329,7 @@ int invoke()
         if (!input.contains("execute")) throw std::runtime_error("command is not specified");
         auto command = input["execute"].get<std::string>();
         auto arguments = input["arguments"];
-        if (command == "echo") return echo(arguments);
-        else if (command == "sleep") return sleep(arguments);
-        else if (command == "system-status") return system_status(arguments);
-        else if (command == "install") return install(arguments);
-        else if (command == "get-usable-disks-for-install") return get_usable_disks_for_install(arguments);
+        if (commands.contains(command)) return commands[command](arguments);
         else throw std::runtime_error("Unknown command: " + command);
     }
     catch (const std::runtime_error& err) {
