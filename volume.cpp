@@ -5,9 +5,11 @@
  * @date 2019-2020
  * @details This file is part of the Walbrix Virtual Machine Manager.
  */
+#include <fcntl.h>
 #include <unistd.h>
 #include <sys/statvfs.h>
 #include <sys/wait.h>
+#include <sys/mount.h>
 
 #include <iostream>
 #include <fstream>
@@ -233,6 +235,23 @@ static bool clean(const std::filesystem::path& vm_root, const std::string& volum
     return std::filesystem::remove_all(*volume_dir / ".trash") > 0;
 }
 
+static void optimize(const std::filesystem::path& path)
+{
+    if (btrfs_util_is_subvolume(path.c_str()) != BTRFS_UTIL_OK) {
+        throw std::runtime_error(path.string() + " is offline or not a btrfs volume");
+    }
+    //else
+    auto pid = fork();
+    if (pid < 0) throw std::runtime_error("fork() failed");
+    if (pid == 0) {
+        if (execlp("btrfs", "btrfs", "filesystem", "defrag", "-r", path.c_str(), NULL) < 0) exit(-1);
+    }
+    int wstatus;
+    if (waitpid(pid, &wstatus, 0) < 0) throw std::runtime_error("waitpid() failed");
+    if (!WIFEXITED(wstatus)) throw std::runtime_error("btrfs filesystem defragment terminated");
+    if (WEXITSTATUS(wstatus) != 0) throw std::runtime_error("btrfs filesystem defragment failed");
+}
+
 namespace volume {
 
 std::optional<std::pair<std::filesystem::path,std::string/*fstype*/>> get_source_device_from_mountpoint(const std::filesystem::path& path)
@@ -450,6 +469,17 @@ int clean(const std::filesystem::path& vm_root, const std::optional<std::string>
         }
     }
     return all_success? 0 : 1;
+}
+
+int optimize(const std::filesystem::path& vm_root, const std::string& volume_name)
+{
+    auto volume = get_volume(vm_root, volume_name);
+    if (!volume) {
+        std::cerr << "Volume " + volume_name + " does not exist" << std::endl;
+        return 1;
+    }
+    ::optimize(volume->path);
+    return 0;
 }
 
 } // namespace volume

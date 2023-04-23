@@ -20,6 +20,7 @@ namespace volume {
     int snapshot(const std::filesystem::path& vm_root, const std::string& volume_name);
     int backup(const std::filesystem::path& vm_root);
     int clean(const std::filesystem::path& vm_root, const std::optional<std::string>& volume_name);
+    int optimize(const std::filesystem::path& vm_root, const std::string& volume_name);
 }
 
 #endif

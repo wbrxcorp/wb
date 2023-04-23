@@ -279,6 +279,16 @@ namespace subcommand {
         }
     };
 
+    static SubSubCommand volume_optimize = {
+        argparse::ArgumentParser("optimize"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_argument("name").nargs(1);
+        },[](const argparse::ArgumentParser& parser) {
+            must_be_root();
+            return volume::optimize(vm_root(), parser.get("name"));
+        }
+    };
+
     // wg subsubcommands
 
     static SubSubCommand wg_genkey = {
@@ -367,6 +377,7 @@ static std::map<std::string,SubCommand> subcommands = {
         {"snapshot", subcommand::volume_snapshot},
         {"backup", subcommand::volume_backup},
         {"clean", subcommand::volume_clean},
+        {"optimize", subcommand::volume_optimize}
     }}},
     {"wg", {argparse::ArgumentParser("wg"), std::map<std::string,SubSubCommand> {
         {"genkey", subcommand::wg_genkey},
