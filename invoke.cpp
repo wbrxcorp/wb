@@ -133,7 +133,7 @@ namespace invoke {
 int sleep(const nlohmann::json& arguments)
 {
     auto seconds = arguments.get<uint8_t>();
-    sleep(seconds);
+    ::sleep(seconds);
     std::cout << nlohmann::json({{"return", true}});
     return 0;
 }
