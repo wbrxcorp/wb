@@ -313,34 +313,38 @@ int detect_timezone(const nlohmann::json&)
     return 0;
 }
 
-static std::map<std::string, std::function<int(const nlohmann::json&)>> commands = {
-    {"echo", echo},
-    {"sleep", sleep},
-    {"system-status", system_status},
-    {"install", install},
-    {"get-usable-disks-for-install", get_usable_disks_for_install},
-    {"detect-timezone", detect_timezone}
+static std::map<std::string, 
+    std::pair<std::function<int(const nlohmann::json&)>,bool/*stream_response*/>> commands = {
+    {"echo", {echo, false}},
+    {"sleep", {sleep, false}},
+    {"system-status", {system_status, false}},
+    {"install", {install, true}},
+    {"get-usable-disks-for-install", {get_usable_disks_for_install, false}},
+    {"detect-timezone", {detect_timezone, false}}
 };
 
 int invoke()
 {
+    bool stream_response = false;
     try {
         auto input = nlohmann::json::parse(std::cin);
         if (!input.contains("execute")) throw std::runtime_error("command is not specified");
         auto command = input["execute"].get<std::string>();
         auto arguments = input["arguments"];
-        if (commands.contains(command)) return commands[command](arguments);
-        else throw std::runtime_error("Unknown command: " + command);
+        if (!commands.contains(command)) throw std::runtime_error("Unknown command: " + command);
+        //else
+        auto& [func,_stream_response] = commands[command];
+        stream_response = _stream_response;
+        return func(arguments);
     }
-    catch (const std::runtime_error& err) {
-        std::cout << nlohmann::json({{"error", err.what()}});
-        return 1;
+    catch (const std::exception& err) {
+        if (stream_response) {
+            std::cout << "ERROR:" << err.what() << std::endl;
+        } else {
+            std::cout << nlohmann::json({{"error", err.what()}});
+        }
     }
-    catch (const nlohmann::json::parse_error& err) {
-        std::cout << nlohmann::json({{"error", err.what()}});
-        return 2;
-    }
-    return 0;
+    return 1;
 }
 
 } // namespace invoke
