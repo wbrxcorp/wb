@@ -1,6 +1,8 @@
 #include <sys/wait.h>
 
 #include <memory>
+#include <iostream>
+#include <fstream>
 #include <filesystem>
 #include <wayland-client.h>
 
@@ -79,4 +81,23 @@ int generate_rdp_cert()
     int wstatus;
     if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus)) throw std::runtime_error("openssl command terminated abnormally");
     return WEXITSTATUS(wstatus);
+}
+
+/**
+ * /sys/block/[storage_device_name]/device/wwid ファイルの内容をすべて表示する。
+ */
+void list_wwid()
+{
+    std::filesystem::path sys_block("/sys/block");
+    for (auto &p: std::filesystem::directory_iterator(sys_block)) {
+        auto disk_name = p.path().filename();
+        std::filesystem::path device(p.path() / "device");
+        if (!std::filesystem::is_directory(device)) continue;
+        std::filesystem::path wwid(device / "wwid");
+        if (!std::filesystem::exists(wwid)) continue;
+        std::ifstream ifs(wwid);
+        std::string line;
+        std::getline(ifs, line);
+        std::cout << disk_name.string() << ": " << line << std::endl;
+    }
 }

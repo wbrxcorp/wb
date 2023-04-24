@@ -356,6 +356,16 @@ namespace subcommand {
         }
     };
 
+    static SubSubCommand misc_list_wwid = {
+        argparse::ArgumentParser("list-wwid"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("List WWID of all block devices");
+        },[](const argparse::ArgumentParser& parser) {
+            list_wwid();
+            return 0;
+        }
+    };
+
 } // namespace subcommand
 
 static std::map<std::string,SubCommand> subcommands = {
@@ -388,6 +398,7 @@ static std::map<std::string,SubCommand> subcommands = {
     {"misc", {argparse::ArgumentParser("misc"), std::map<std::string,SubSubCommand> {
         {"wayland-ping", subcommand::misc_wayland_ping},
         {"generate-rdp-cert", subcommand::misc_generate_rdp_cert},
+        {"list-wwid", subcommand::misc_list_wwid}
     }}}
 };
 
@@ -469,7 +480,13 @@ static int _main(int argc, char* argv[])
 #ifdef __VSCODE_ACTIVE_FILE__
 int main(int argc, char* argv[])
 {
-    return _main(argc, argv);
+    char* _argv[] = {
+       argv[0],
+        "create",
+        "--help"
+    };
+    int _argc = sizeof(_argv) / sizeof(_argv[0]);
+    return _main(_argc, _argv);
 }
 #endif
 
