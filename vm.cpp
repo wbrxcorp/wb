@@ -447,6 +447,13 @@ int list(const std::filesystem::path& vm_root)
 
 int create(const std::filesystem::path& vm_root, const std::string& vmname, const CreateOptions& options/* = {}*/)
 {
+    // check if vmname is RFC952/RFC1123 compliant
+    if (vmname.length() > 63) throw std::runtime_error("VM name must be 63 characters or less");
+    if (vmname[0] == '-' || vmname[vmname.length() - 1] == '-') throw std::runtime_error("VM name must not start or end with '-'");
+    if (vmname.find("--") != std::string::npos) throw std::runtime_error("VM name must not contain consecutive '-'");
+    if (vmname.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
+        throw std::runtime_error("VM name must contain only alphanumeric characters and '-'");
+
     auto vm_dir = vm_root / vmname;
     if (std::filesystem::exists(vm_dir)) {
         throw std::runtime_error(vmname + " already exists");
