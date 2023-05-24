@@ -453,6 +453,7 @@ int create(const std::filesystem::path& vm_root, const std::string& vmname, cons
     if (vmname.find("--") != std::string::npos) throw std::runtime_error("VM name must not contain consecutive '-'");
     if (vmname.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-") != std::string::npos)
         throw std::runtime_error("VM name must contain only alphanumeric characters and '-'");
+    if (vmname.find_first_not_of("0123456789") == std::string::npos) throw std::runtime_error("VM name must not be all digits");
 
     auto vm_dir = vm_root / vmname;
     if (std::filesystem::exists(vm_dir)) {
