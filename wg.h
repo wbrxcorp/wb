@@ -1,5 +1,6 @@
 #ifndef __WG_H__
 #define __WG_H__
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <optional>
