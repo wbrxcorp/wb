@@ -9,6 +9,7 @@ namespace wg {
     int pubkey(bool qrcode);
     int getconfig(bool accept_ssh_key);
     int notify(const std::string& uri);
+    int ping(bool success_if_not_active, uint16_t count, bool verbose);
 }
 
 #endif

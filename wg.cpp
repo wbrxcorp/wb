@@ -1,5 +1,8 @@
 #include <string.h>
 #include <sys/wait.h>
+#include <arpa/inet.h>
+#include <netinet/icmp6.h>
+#include <sys/socket.h>
 
 #include <iostream>
 #include <filesystem>
@@ -16,6 +19,7 @@
 
 static const std::filesystem::path privkey_path("/etc/walbrix/privkey"), wireguard_dir("/etc/wireguard");
 static const std::string base_url("https://hub.walbrix.net/wghub");
+static const std::string tunnel_name("wg-walbrix");
 
 static std::string get_privkey_b64()
 {
@@ -87,6 +91,93 @@ static size_t curl_callback(char *buffer, size_t size, size_t nmemb, void *f)
 {
     (*((std::string*)f)) += std::string(buffer, size * nmemb);
     return size * nmemb;
+}
+
+static std::optional<std::string> get_wg_peer_address(const std::string& tunnel_name)
+{
+    int fd[2];
+    if (pipe(fd) < 0) throw std::runtime_error("pipe() failed");
+
+    auto pid = fork();
+    if (pid < 0) throw std::runtime_error("fork() failed");
+    if (pid == 0) {
+        dup2(fd[1], STDOUT_FILENO);
+        close(fd[0]);
+        _exit(execlp("wg", "wg", "show", "all", "allowed-ips", NULL));
+    }
+    //else
+    close(fd[1]);
+
+    std::optional<std::string> peer_address;
+    {
+        __gnu_cxx::stdio_filebuf<char> filebuf(fd[0], std::ios::in);
+        std::istream f(&filebuf);
+        std::string line;
+        while (std::getline(f, line)) {
+            if (!line.starts_with(tunnel_name + "\t")) continue;
+            line.erase(0, 11);
+            auto delim_pos = line.find_first_of('\t');
+            if (delim_pos == line.npos) continue;
+            //else
+            line.erase(0, delim_pos + 1);
+            if (!line.ends_with("/128")) continue;
+            line.resize(line.length() - 4);
+            peer_address = line;
+            break;
+        }
+    }
+
+    int wstatus;
+    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+        throw std::runtime_error("wg command failed");
+    //else
+    return peer_address;
+}
+
+static bool ping(const std::string& peer_address, uint16_t count = 5, bool verbose = false)
+{
+    int sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+    if (sock < 0) throw std::runtime_error("socket() failed");
+    struct sockaddr_in6 addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin6_family = AF_INET6;
+    if (inet_pton(AF_INET6, peer_address.c_str(), &addr.sin6_addr) != 1)
+        throw std::runtime_error("inet_pton() failed");
+    struct icmp6_hdr icmp6;
+    memset(&icmp6, 0, sizeof(icmp6));
+    icmp6.icmp6_type = ICMP6_ECHO_REQUEST;
+    icmp6.icmp6_code = 0;
+    icmp6.icmp6_id = htons(getpid());
+    int seq = 0;
+    icmp6.icmp6_cksum = 0; // leave 0 to let kernel fill it
+
+    char buf[1024];
+    struct sockaddr_in6 peer_addr;
+    socklen_t peer_addr_len = sizeof(peer_addr);
+
+    for (int i = 0; i < count; i++) {
+        if (verbose) std::cout << "Sending echo request to " << peer_address << " with seq=" << seq << std::endl;
+        icmp6.icmp6_seq = htons(seq++);
+        if (sendto(sock, &icmp6, sizeof(icmp6), 0, (struct sockaddr*)&addr, sizeof(addr)) < 0)
+            throw std::runtime_error("sendto() failed");
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(sock, &fds);
+        struct timeval tv;
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        int ret = select(sock + 1, &fds, NULL, NULL, &tv);
+        if (ret < 0) throw std::runtime_error("select() failed");
+        if (ret > 0) {
+            ssize_t n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr*)&peer_addr, &peer_addr_len);
+            if (n < 0) throw std::runtime_error("recvfrom() failed");
+            //else
+            if (verbose) std::cout << "Received echo reply with seq=" << ntohs(((struct icmp6_hdr*)buf)->icmp6_seq) << std::endl;
+            return true;
+        }
+    }
+    if (verbose) std::cout << "No echo reply received" << std::endl;
+    return false;
 }
 
 namespace wg {
@@ -218,48 +309,30 @@ int getconfig(bool accept_ssh_key)
 
 int notify(const std::string& uri)
 {
-    int fd[2];
-    if (pipe(fd) < 0) throw std::runtime_error("pipe() failed");
+    auto peer_address = get_wg_peer_address(tunnel_name);
+    if (!peer_address) return 0; // just return success if wg-walbrix is not connected
 
-    auto pid = fork();
-    if (pid < 0) throw std::runtime_error("fork() failed");
-    if (pid == 0) {
-        dup2(fd[1], STDOUT_FILENO);
-        close(fd[0]);
-        _exit(execlp("wg", "wg", "show", "all", "allowed-ips", NULL));
-    }
-    //else
-    close(fd[1]);
+    std::string url = "http://[" + (*peer_address) + "]" + (uri.starts_with('/')? "" : "/") + uri;
+    std::string buf;
+    std::shared_ptr<CURL> curl(curl_easy_init(), curl_easy_cleanup);
+    curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 3);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, curl_callback);
+    curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &buf);
+    curl_easy_perform(curl.get());
 
-    {
-        __gnu_cxx::stdio_filebuf<char> filebuf(fd[0], std::ios::in);
-        std::istream f(&filebuf);
-        std::string line;
-        while (std::getline(f, line)) {
-            if (!line.starts_with("wg-walbrix\t")) continue;
-            line.erase(0, 11);
-            auto delim_pos = line.find_first_of('\t');
-            if (delim_pos == line.npos) continue;
-            //else
-            line.erase(0, delim_pos + 1);
-            if (!line.ends_with("/128")) continue;
-            line.resize(line.length() - 4);
-            std::string url = "http://[" + line + "]" + (uri.starts_with('/')? "" : "/") + uri;
-            std::string buf;
-            std::shared_ptr<CURL> curl(curl_easy_init(), curl_easy_cleanup);
-            curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
-            curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 3);
-            curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, curl_callback);
-            curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &buf);
-            curl_easy_perform(curl.get());
-        }
-    }
-
-    int wstatus;
-    if (waitpid(pid, &wstatus, 0) < 0 || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
-        throw std::runtime_error("wg command failed");
-    //else
     return 0;
+}
+
+int ping(bool success_if_not_active, uint16_t count, bool verbose)
+{
+    auto peer_address = get_wg_peer_address(tunnel_name);
+    if (!peer_address) {
+        if (verbose) std::cout << "Tunnel '" << tunnel_name << "' is not active" << std::endl;
+        return success_if_not_active? 0 : 1;
+    }
+
+    return ::ping(*peer_address, count, verbose)? 0 : 1;
 }
 
 } // namespace wg
@@ -267,6 +340,7 @@ int notify(const std::string& uri)
 #ifdef __VSCODE_ACTIVE_FILE__
 int main(int argc, char* argv[])
 {
-    return wg_notify({"wg-notify","/hoge/fuga"});
+    //return wg_notify({"wg-notify","/hoge/fuga"});
+    return 0;
 }
 #endif

@@ -331,6 +331,17 @@ namespace subcommand {
         }
     };
 
+    static SubSubCommand wg_ping = {
+        argparse::ArgumentParser("ping"), 
+        [](argparse::ArgumentParser& parser) {
+            parser.add_description("Ping WireGuard peer");
+            parser.add_argument("-q", "--quiet").default_value(false).implicit_value(true);
+            parser.add_argument("--success-if-not-active").default_value(false).implicit_value(true);
+        },[](const argparse::ArgumentParser& parser) {
+            return wg::ping(parser.get<bool>("--success-if-not-active"), 5, !parser.get<bool>("--quiet"));
+        }
+    };
+
     static SubSubCommand misc_wayland_ping = {
         argparse::ArgumentParser("wayland-ping"), 
         [](argparse::ArgumentParser& parser) {
@@ -394,6 +405,7 @@ static std::map<std::string,SubCommand> subcommands = {
         {"pubkey", subcommand::wg_pubkey},
         {"getconfig", subcommand::wg_getconfig},
         {"notify", subcommand::wg_notify},
+        {"ping", subcommand::wg_ping}
     }}},
     {"misc", {argparse::ArgumentParser("misc"), std::map<std::string,SubSubCommand> {
         {"wayland-ping", subcommand::misc_wayland_ping},
