@@ -35,7 +35,8 @@ std::string human_readable(uint64_t size, double k/* = 1024.0*/)
 
 bool wayland_ping(bool wait)
 {
-    std::shared_ptr<wl_display> display(wl_display_connect(NULL), wl_display_disconnect);
+    std::shared_ptr<wl_display> display(wl_display_connect(NULL), 
+        [](auto ptr){if (ptr) wl_display_disconnect(ptr);});
 
     if (!display) {
         throw std::runtime_error("Can't connect to display");
@@ -101,3 +102,10 @@ void list_wwid()
         std::cout << disk_name.string() << ": " << line << std::endl;
     }
 }
+
+#ifdef __VSCODE_ACTIVE_FILE__
+int main()
+{
+    wayland_ping(false);
+}
+#endif // __TEST__
