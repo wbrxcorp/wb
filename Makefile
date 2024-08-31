@@ -1,3 +1,5 @@
+PREFIX ?= /usr/local
+
 .SUFFIXES: .cpp .o .bin
 
 OBJS=wb.o vm.o volume.o install.o wg.o misc.o invoke.o
@@ -18,7 +20,7 @@ libwb.a: $(OBJS)
 	g++ -std=c++20 -D__VSCODE_ACTIVE_FILE__ -g -Wall -o $@ $< -L . -lwb $(LIBS)
 
 install: wb
-	cp -a wb /usr/local/bin/
+	install -Dm755 wb $(DESTDIR)$(PREFIX)/bin/wb
 
 clean:
 	rm -f wb *.a *.o *.bin
