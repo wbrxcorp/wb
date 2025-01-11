@@ -3,7 +3,7 @@ PREFIX ?= /usr/local
 .SUFFIXES: .cpp .o .bin
 
 OBJS=wb.o vm.o volume.o install.o wg.o misc.o invoke.o
-LIBS=-lmount -lsmartcols -liniparser4 -lblkid -lbtrfsutil -luuid -lcurl -lwghub -lcrypto -lqrencode -lwayland-client
+LIBS=-lmount -lsmartcols -liniparser -lblkid -lbtrfsutil -luuid -lcurl -lwghub -lcrypto -lqrencode -lwayland-client
 
 all: wb libwb.a
 

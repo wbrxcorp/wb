@@ -15,7 +15,7 @@
 
 #include <libsmartcols/libsmartcols.h>
 #include <nlohmann/json.hpp>
-#include <iniparser4/iniparser.h>
+#include <iniparser/iniparser.h>
 #include <ext2fs/ext2_fs.h>
 
 #include "volume.h"
