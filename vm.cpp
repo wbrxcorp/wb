@@ -26,6 +26,12 @@ static int systemctl(const std::string& action, const std::string& service, bool
     auto pid = fork();
     if (pid < 0) throw std::runtime_error("fork() failed");
     if (pid == 0) {
+        // invalidate stdin
+        close(STDIN_FILENO);
+        if (open("/dev/null", O_RDONLY) < 0) {
+            std::cerr << "open('/dev/null') failed" << std::endl;
+            _exit(1);
+        }
         if (quiet) {
             _exit(execlp("systemctl", "systemctl", "-q", getuid() == 0? "--system" : "--user", action.c_str(), service.c_str(), NULL));
         } else {
